@@ -7,6 +7,12 @@ from ..models import Asset, Node
 from .asset import AssetGrantedSerializer
 
 
+__all__ = [
+    'NodeSerializer', "NodeGrantedSerializer", "NodeAddChildrenSerializer",
+    "NodeAssetsSerializer",
+]
+
+
 class NodeGrantedSerializer(BulkSerializerMixin, serializers.ModelSerializer):
     """
     授权资产组
@@ -42,7 +48,7 @@ class NodeSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Node
-        fields = ['id', 'key', 'value', 'parent', 'assets_amount', 'is_asset']
+        fields = ['id', 'key', 'value', 'parent', 'assets_amount', 'is_node']
         list_serializer_class = BulkListSerializer
 
     @staticmethod
