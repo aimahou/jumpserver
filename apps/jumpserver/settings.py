@@ -229,7 +229,11 @@ LOGGING = {
         'django_auth_ldap': {
             'handlers': ['console', 'ansible_logs'],
             'level': "INFO",
-        }
+        },
+        # 'django.db': {
+        #     'handlers': ['console', 'file'],
+        #     'level': 'DEBUG'
+        # }
     }
 }
 
@@ -396,6 +400,9 @@ TERMINAL_REPLAY_STORAGE = {
         "TYPE": "server",
     },
 }
+
+
+DEFAULT_PASSWORD_MIN_LENGTH = 6
 
 # Django bootstrap3 setting, more see http://django-bootstrap3.readthedocs.io/en/latest/settings.html
 BOOTSTRAP3 = {
