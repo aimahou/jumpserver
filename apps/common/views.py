@@ -1,18 +1,16 @@
-
-from django.core.cache import cache
-from django.views.generic import TemplateView, View, DetailView
-from django.shortcuts import render, redirect, Http404, reverse
+from django.views.generic import TemplateView
+from django.shortcuts import render, redirect
 from django.contrib import messages
 from django.utils.translation import ugettext as _
 from django.conf import settings
 
 from .forms import EmailSettingForm, LDAPSettingForm, BasicSettingForm, \
     TerminalSettingForm, SecuritySettingForm
-from .mixins import AdminUserRequiredMixin
+from common.permissions import SuperUserRequiredMixin
 from .signals import ldap_auth_enable
 
 
-class BasicSettingView(AdminUserRequiredMixin, TemplateView):
+class BasicSettingView(SuperUserRequiredMixin, TemplateView):
     form_class = BasicSettingForm
     template_name = "common/basic_setting.html"
 
@@ -38,7 +36,7 @@ class BasicSettingView(AdminUserRequiredMixin, TemplateView):
             return render(request, self.template_name, context)
 
 
-class EmailSettingView(AdminUserRequiredMixin, TemplateView):
+class EmailSettingView(SuperUserRequiredMixin, TemplateView):
     form_class = EmailSettingForm
     template_name = "common/email_setting.html"
 
@@ -64,7 +62,7 @@ class EmailSettingView(AdminUserRequiredMixin, TemplateView):
             return render(request, self.template_name, context)
 
 
-class LDAPSettingView(AdminUserRequiredMixin, TemplateView):
+class LDAPSettingView(SuperUserRequiredMixin, TemplateView):
     form_class = LDAPSettingForm
     template_name = "common/ldap_setting.html"
 
@@ -92,7 +90,7 @@ class LDAPSettingView(AdminUserRequiredMixin, TemplateView):
             return render(request, self.template_name, context)
 
 
-class TerminalSettingView(AdminUserRequiredMixin, TemplateView):
+class TerminalSettingView(SuperUserRequiredMixin, TemplateView):
     form_class = TerminalSettingForm
     template_name = "common/terminal_setting.html"
 
@@ -122,7 +120,7 @@ class TerminalSettingView(AdminUserRequiredMixin, TemplateView):
             return render(request, self.template_name, context)
 
 
-class SecuritySettingView(AdminUserRequiredMixin, TemplateView):
+class SecuritySettingView(SuperUserRequiredMixin, TemplateView):
     form_class = SecuritySettingForm
     template_name = "common/security_setting.html"
 

@@ -3,6 +3,7 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
+from orgs.mixins import OrgModelForm
 from ..models import Domain, Asset, Gateway
 from .user import PasswordAndKeyAuthForm
 
@@ -34,7 +35,11 @@ class DomainForm(forms.ModelForm):
         return instance
 
 
-class GatewayForm(PasswordAndKeyAuthForm):
+class GatewayForm(PasswordAndKeyAuthForm, OrgModelForm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        password_field = self.fields.get('password')
+        password_field.help_text = _('Password should not contain special characters')
 
     def save(self, commit=True):
         # Because we define custom field, so we need rewrite :method: `save`

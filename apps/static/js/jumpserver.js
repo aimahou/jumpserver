@@ -154,8 +154,10 @@ function activeNav() {
 function APIUpdateAttr(props) {
     // props = {url: .., body: , success: , error: , method: ,}
     props = props || {};
-    var success_message = props.success_message || '更新成功!';
-    var fail_message = props.fail_message || '更新时发生未知错误.';
+    var user_success_message = props.success_message;
+    var default_success_message = gettext('Update is successful!');
+    var user_fail_message = props.fail_message;
+    var default_failed_message = gettext('An unknown error occurred while updating..');
     var flash_message = props.flash_message || true;
     if (props.flash_message === false){
         flash_message = false;
@@ -169,18 +171,40 @@ function APIUpdateAttr(props) {
         dataType: props.data_type || "json"
     }).done(function(data, textStatue, jqXHR) {
         if (flash_message) {
-            toastr.success(success_message);
+            var msg = "";
+            if (user_fail_message) {
+                msg = user_success_message;
+            } else {
+                msg = default_success_message;
+            }
+            toastr.success(msg);
         }
         if (typeof props.success === 'function') {
             return props.success(data);
-        } 
+        }
     }).fail(function(jqXHR, textStatus, errorThrown) {
         if (flash_message) {
-            toastr.error(fail_message);
+            var msg = "";
+            console.log(jqXHR);
+            console.log(textStatus);
+            console.log(errorThrown);
+            if (user_fail_message) {
+                msg = user_fail_message;
+            } else if (jqXHR.responseJSON) {
+                if (jqXHR.responseJSON.error) {
+                    msg = jqXHR.responseJSON.error
+                } else if (jqXHR.responseJSON.msg) {
+                    msg = jqXHR.responseJSON.msg
+                }
+            }
+            if (msg === "") {
+                msg = default_failed_message;
+            }
+            toastr.error(msg);
         }
         if (typeof props.error === 'function') {
-            return props.error(jqXHR.responseText);
-        } 
+            return props.error(jqXHR.responseText, jqXHR.status);
+        }
     });
   // return true;
 }
@@ -198,28 +222,70 @@ function objectDelete(obj, name, url, redirectTo) {
             }
         };
         var fail = function() {
-            swal("错误", "删除"+"[ "+name+" ]"+"遇到错误", "error");
+            // swal("错误", "删除"+"[ "+name+" ]"+"遇到错误", "error");
+            swal(gettext('Error'), "[ "+name+" ]" + gettext("Being used by the asset, please unbind the asset first."), "error");
         };
         APIUpdateAttr({
             url: url,
             body: JSON.stringify(body),
             method: 'DELETE',
-            success_message: "删除成功",
+            success_message: gettext("Delete the success"),
             success: success,
             error: fail
         });
     }
     swal({
-        title: '你确定删除吗 ?',
+        title: gettext('Are you sure about deleting it?'),
         text: " [" + name + "] ",
         type: "warning",
         showCancelButton: true,
-        cancelButtonText: '取消',
+        cancelButtonText: gettext('Cancel'),
         confirmButtonColor: "#ed5565",
-        confirmButtonText: '确认',
+        confirmButtonText: gettext('Confirm'),
         closeOnConfirm: true,
     }, function () {
-        doDelete()       
+        doDelete()
+    });
+}
+
+function orgDelete(obj, name, url, redirectTo){
+    function doDelete() {
+        var body = {};
+        var success = function() {
+            if (!redirectTo) {
+                $(obj).parent().parent().remove();
+            } else {
+                window.location.href=redirectTo;
+            }
+        };
+        var fail = function(responseText, status) {
+            if (status === 400){
+                swal(gettext("Error"),  "[ " + name + " ] " + gettext("The organization contains undeleted information. Please try again after deleting"), "error");
+            }
+            else if (status === 405){
+                swal(gettext("Error"), " [ "+ name + " ] " + gettext("Do not perform this operation under this organization. Try again after switching to another organization"), "error");
+            }
+        };
+        APIUpdateAttr({
+            url: url,
+            body: JSON.stringify(body),
+            method: 'DELETE',
+            success_message: gettext("Delete the success"),
+            success: success,
+            error: fail
+        });
+    }
+    swal({
+        title: gettext("Please ensure that the following information in the organization has been deleted"),
+        text: gettext("User list、User group、Asset list、Domain list、Admin user、System user、Labels、Asset permission"),
+        type: "warning",
+        showCancelButton: true,
+        cancelButtonText: gettext('Cancel'),
+        confirmButtonColor: "#ed5565",
+        confirmButtonText: gettext('Confirm'),
+        closeOnConfirm: true
+    }, function () {
+        doDelete();
     });
 }
 
@@ -249,6 +315,28 @@ function makeLabel(data) {
 var jumpserver = {};
 jumpserver.checked = false;
 jumpserver.selected = {};
+jumpserver.language = {
+    processing: gettext('Loading ...'),
+    search: gettext('Search'),
+    select: {
+        rows: {
+            _:  gettext("Selected item %d"),
+            0: ""
+        }
+    },
+    lengthMenu: gettext("Per page _MENU_"),
+    info: gettext('Displays the results of items _START_ to _END_; A total of _TOTAL_ entries'),
+    infoFiltered: "",
+    infoEmpty: "",
+    zeroRecords: gettext("No match"),
+    emptyTable: gettext('No record'),
+    paginate: {
+        first: "«",
+        previous: "‹",
+        next: "›",
+        last: "»"
+    }
+};
 jumpserver.initDataTable = function (options) {
   // options = {
   //    ele *: $('#dataTable_id'),
@@ -272,7 +360,7 @@ jumpserver.initDataTable = function (options) {
               $(td).html('<input type="checkbox" class="text-center ipt_check" id=99991937>'.replace('99991937', cellData));
           }
       },
-      {className: 'text-center', targets: '_all'}
+      {className: 'text-center', render: $.fn.dataTable.render.text(), targets: '_all'}
   ];
   columnDefs = options.columnDefs ? options.columnDefs.concat(columnDefs) : columnDefs;
   var select = {
@@ -292,21 +380,7 @@ jumpserver.initDataTable = function (options) {
         },
         columns: options.columns || [],
         select: options.select || select,
-        language: {
-            search: "搜索",
-            lengthMenu: "每页  _MENU_",
-            info: "显示第 _START_ 至 _END_ 项结果; 总共 _TOTAL_ 项",
-            infoFiltered:   "",
-            infoEmpty:      "",
-            zeroRecords:    "没有匹配项",
-            emptyTable:     "没有记录",
-            paginate: {
-                first:      "«",
-                previous:   "‹",
-                next:       "›",
-                last:       "»"
-            }
-        },
+        language: jumpserver.language,
         lengthMenu: [[10, 15, 25, 50, -1], [10, 15, 25, 50, "All"]]
     });
     table.on('select', function(e, dt, type, indexes) {
@@ -342,6 +416,16 @@ jumpserver.initDataTable = function (options) {
     return table;
 };
 
+jumpserver.initStaticTable = function (selector) {
+    $(selector).DataTable({
+        "searching": false,
+        "bInfo": false,
+        "paging": false,
+        "order": [],
+        "language": jumpserver.language
+    });
+};
+
 jumpserver.initServerSideDataTable = function (options) {
   // options = {
   //    ele *: $('#dataTable_id'),
@@ -374,9 +458,8 @@ jumpserver.initServerSideDataTable = function (options) {
       };
   var table = ele.DataTable({
         pageLength: options.pageLength || 15,
-        dom: options.dom || '<"#uc.pull-left">flt<"row m-t"<"col-md-8"<"#op.col-md-6"><"col-md-6 text-center"i>><"col-md-4"p>>',
+        dom: options.dom || '<"#uc.pull-left">fltr<"row m-t"<"col-md-8"<"#op.col-md-6"><"col-md-6 text-center"i>><"col-md-4"p>>',
         order: options.order || [],
-        // select: options.select || 'multi',
         buttons: [],
         columnDefs: columnDefs,
         serverSide: true,
@@ -431,21 +514,7 @@ jumpserver.initServerSideDataTable = function (options) {
         },
         columns: options.columns || [],
         select: options.select || select,
-        language: {
-            search: "搜索",
-            lengthMenu: "每页  _MENU_",
-            info: "显示第 _START_ 至 _END_ 项结果; 总共 _TOTAL_ 项",
-            infoFiltered:   "",
-            infoEmpty:      "",
-            zeroRecords:    "没有匹配项",
-            emptyTable:     "没有记录",
-            paginate: {
-                first:      "«",
-                previous:   "‹",
-                next:       "›",
-                last:       "»"
-            }
-        },
+        language: jumpserver.language,
         lengthMenu: [[10, 15, 25, 50], [10, 15, 25, 50]]
     });
     table.selected = [];
@@ -476,8 +545,7 @@ jumpserver.initServerSideDataTable = function (options) {
                 }
             })
         }
-    }).
-    on('draw', function(){
+    }).on('draw', function(){
         $('#op').html(options.op_html || '');
         $('#uc').html(options.uc_html || '');
         var table_data = [];
@@ -682,7 +750,7 @@ function popoverPasswordRules(password_check_rules, $el) {
 }
 
 // 初始化弹窗popover
-function initPopover($container, $progress, $idPassword, $el, password_check_rules){
+function initPopover($container, $progress, $idPassword, $el, password_check_rules, i18n_fallback){
     options = {};
     // User Interface
     options.ui = {
@@ -693,6 +761,14 @@ function initPopover($container, $progress, $idPassword, $el, password_check_rul
         },
         showProgressbar: true,
         showVerdictsInsideProgressBar: true
+    };
+    options.i18n = {
+        fallback: i18n_fallback,
+        t: function (key) {
+            var result = '';
+            result = options.i18n.fallback[key];
+            return result === key ? '' : result;
+        }
     };
     $idPassword.pwstrength(options);
     popoverPasswordRules(password_check_rules, $el);

@@ -12,8 +12,8 @@ def get_assets_by_id_list(id_list):
     return Asset.objects.filter(id__in=id_list)
 
 
-def get_assets_by_hostname_list(hostname_list):
-    return Asset.objects.filter(hostname__in=hostname_list)
+def get_assets_by_fullname_list(hostname_list):
+    return Asset.get_queryset_by_fullname_list(hostname_list)
 
 
 def get_system_user_by_name(name):
@@ -54,7 +54,8 @@ def test_gateway_connectability(gateway):
     proxy.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
     try:
-        proxy.connect(gateway.ip, username=gateway.username,
+        proxy.connect(gateway.ip, gateway.port,
+                      username=gateway.username,
                       password=gateway.password,
                       pkey=gateway.private_key_obj)
     except(paramiko.AuthenticationException,

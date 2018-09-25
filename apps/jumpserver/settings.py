@@ -14,7 +14,7 @@ import os
 import sys
 
 import ldap
-from django_auth_ldap.config import LDAPSearch
+from django_auth_ldap.config import LDAPSearch, LDAPSearchUnion
 from django.urls import reverse_lazy
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
@@ -56,6 +56,7 @@ ALLOWED_HOSTS = CONFIG.ALLOWED_HOSTS or []
 # Application definition
 
 INSTALLED_APPS = [
+    'orgs.apps.OrgsConfig',
     'users.apps.UsersConfig',
     'assets.apps.AssetsConfig',
     'perms.apps.PermsConfig',
@@ -65,16 +66,24 @@ INSTALLED_APPS = [
     'audits.apps.AuditsConfig',
     'rest_framework',
     'rest_framework_swagger',
+    'drf_yasg',
     'django_filters',
     'bootstrap3',
     'captcha',
     'django_celery_beat',
     'django.contrib.auth',
+    'django.contrib.admin',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
 ]
+
+
+XPACK_DIR = os.path.join(BASE_DIR, 'xpack')
+XPACK_ENABLED = os.path.isdir(XPACK_DIR)
+if XPACK_ENABLED:
+    INSTALLED_APPS.append('xpack.apps.XpackConfig')
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -87,18 +96,39 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'jumpserver.middleware.TimezoneMiddleware',
     'jumpserver.middleware.DemoMiddleware',
+    'jumpserver.middleware.RequestMiddleware',
+    'orgs.middleware.OrgMiddleware',
 ]
 
 ROOT_URLCONF = 'jumpserver.urls'
 
+
+def get_xpack_context_processor():
+    if XPACK_ENABLED:
+        return ['xpack.context_processor.xpack_processor']
+    return []
+
+
+def get_xpack_templates_dir():
+    if XPACK_ENABLED:
+        dirs = []
+        from xpack.utils import find_enabled_plugins
+        for i in find_enabled_plugins():
+            template_dir = os.path.join(BASE_DIR, 'xpack', 'plugins', i, 'templates')
+            if os.path.isdir(template_dir):
+                dirs.append(template_dir)
+        return dirs
+    else:
+        return []
+
+
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [os.path.join(BASE_DIR, 'templates'), ],
+        'DIRS': [os.path.join(BASE_DIR, 'templates'), *get_xpack_templates_dir()],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
-                'jumpserver.context_processor.jumpserver_processor',
                 'django.template.context_processors.i18n',
                 'django.template.context_processors.debug',
                 'django.template.context_processors.request',
@@ -107,6 +137,9 @@ TEMPLATES = [
                 'django.template.context_processors.static',
                 'django.template.context_processors.request',
                 'django.template.context_processors.media',
+                'jumpserver.context_processor.jumpserver_processor',
+                'orgs.context_processor.org_processor',
+                *get_xpack_context_processor(),
             ],
         },
     },
@@ -183,7 +216,10 @@ LOGGING = {
         },
         'file': {
             'level': 'DEBUG',
-            'class': 'logging.FileHandler',
+            'class': 'logging.handlers.TimedRotatingFileHandler',
+            'when': "D",
+            'interval': 1,
+            "backupCount": 7,
             'formatter': 'main',
             'filename': os.path.join(PROJECT_DIR, 'logs', 'jumpserver.log')
         },
@@ -227,7 +263,7 @@ LOGGING = {
             'level': LOG_LEVEL,
         },
         'django_auth_ldap': {
-            'handlers': ['console', 'ansible_logs'],
+            'handlers': ['console', 'file'],
             'level': "INFO",
         },
         # 'django.db': {
@@ -239,7 +275,8 @@ LOGGING = {
 
 # Internationalization
 # https://docs.djangoproject.com/en/1.10/topics/i18n/
-LANGUAGE_CODE = 'en'
+# LANGUAGE_CODE = 'en'
+LANGUAGE_CODE = 'zh'
 
 TIME_ZONE = 'Asia/Shanghai'
 
@@ -250,7 +287,9 @@ USE_L10N = True
 USE_TZ = True
 
 # I18N translation
-LOCALE_PATHS = [os.path.join(BASE_DIR, 'i18n'), ]
+LOCALE_PATHS = [
+    os.path.join(BASE_DIR, 'locale'),
+]
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/1.10/howto/static-files/
@@ -288,9 +327,10 @@ REST_FRAMEWORK = {
     # Use Django's standard `django.contrib.auth` permissions,
     # or allow read-only access for unauthenticated users.
     'DEFAULT_PERMISSION_CLASSES': (
-        'users.permissions.IsSuperUser',
+        'common.permissions.IsOrgAdmin',
     ),
     'DEFAULT_AUTHENTICATION_CLASSES': (
+        # 'rest_framework.authentication.BasicAuthentication',
         'users.authentication.AccessKeyAuthentication',
         'users.authentication.AccessTokenAuthentication',
         'users.authentication.PrivateTokenAuthentication',
@@ -316,6 +356,10 @@ AUTHENTICATION_BACKENDS = [
 # Custom User Auth model
 AUTH_USER_MODEL = 'users.User'
 
+# File Upload Permissions
+FILE_UPLOAD_PERMISSIONS = 0o644
+FILE_UPLOAD_DIRECTORY_PERMISSIONS = 0o755
+
 # Auth LDAP settings
 AUTH_LDAP = CONFIG.AUTH_LDAP
 AUTH_LDAP_SERVER_URI = CONFIG.AUTH_LDAP_SERVER_URI
@@ -325,9 +369,11 @@ AUTH_LDAP_SEARCH_OU = CONFIG.AUTH_LDAP_SEARCH_OU
 AUTH_LDAP_SEARCH_FILTER = CONFIG.AUTH_LDAP_SEARCH_FILTER
 AUTH_LDAP_START_TLS = CONFIG.AUTH_LDAP_START_TLS
 AUTH_LDAP_USER_ATTR_MAP = CONFIG.AUTH_LDAP_USER_ATTR_MAP
-AUTH_LDAP_USER_SEARCH = LDAPSearch(
-    AUTH_LDAP_SEARCH_OU, ldap.SCOPE_SUBTREE, AUTH_LDAP_SEARCH_FILTER,
-)
+AUTH_LDAP_USER_SEARCH_UNION = [
+    LDAPSearch(USER_SEARCH, ldap.SCOPE_SUBTREE, AUTH_LDAP_SEARCH_FILTER)
+    for USER_SEARCH in str(AUTH_LDAP_SEARCH_OU).split("|")
+]
+AUTH_LDAP_USER_SEARCH = LDAPSearchUnion(*AUTH_LDAP_USER_SEARCH_UNION)
 AUTH_LDAP_GROUP_SEARCH_OU = CONFIG.AUTH_LDAP_GROUP_SEARCH_OU
 AUTH_LDAP_GROUP_SEARCH_FILTER = CONFIG.AUTH_LDAP_GROUP_SEARCH_FILTER
 AUTH_LDAP_GROUP_SEARCH = LDAPSearch(
@@ -336,6 +382,7 @@ AUTH_LDAP_GROUP_SEARCH = LDAPSearch(
 AUTH_LDAP_CONNECTION_OPTIONS = {
     ldap.OPT_TIMEOUT: 5
 }
+AUTH_LDAP_GROUP_CACHE_TIMEOUT = 1
 AUTH_LDAP_ALWAYS_UPDATE_USER = True
 AUTH_LDAP_BACKEND = 'django_auth_ldap.backend.LDAPBackend'
 
@@ -343,10 +390,11 @@ if AUTH_LDAP:
     AUTHENTICATION_BACKENDS.insert(0, AUTH_LDAP_BACKEND)
 
 # Celery using redis as broker
-CELERY_BROKER_URL = 'redis://:%(password)s@%(host)s:%(port)s/3' % {
+CELERY_BROKER_URL = 'redis://:%(password)s@%(host)s:%(port)s/%(db)s' % {
     'password': CONFIG.REDIS_PASSWORD if CONFIG.REDIS_PASSWORD else '',
     'host': CONFIG.REDIS_HOST or '127.0.0.1',
     'port': CONFIG.REDIS_PORT or 6379,
+    'db':CONFIG.REDIS_DB_CELERY_BROKER or 3,
 }
 CELERY_TASK_SERIALIZER = 'pickle'
 CELERY_RESULT_SERIALIZER = 'pickle'
@@ -367,10 +415,11 @@ CELERY_WORKER_HIJACK_ROOT_LOGGER = False
 CACHES = {
     'default': {
         'BACKEND': 'redis_cache.RedisCache',
-        'LOCATION': 'redis://:%(password)s@%(host)s:%(port)s/4' % {
+        'LOCATION': 'redis://:%(password)s@%(host)s:%(port)s/%(db)s' % {
             'password': CONFIG.REDIS_PASSWORD if CONFIG.REDIS_PASSWORD else '',
             'host': CONFIG.REDIS_HOST or '127.0.0.1',
             'port': CONFIG.REDIS_PORT or 6379,
+            'db': CONFIG.REDIS_DB_CACHE or 4,
         }
     }
 }
@@ -403,6 +452,9 @@ TERMINAL_REPLAY_STORAGE = {
 
 
 DEFAULT_PASSWORD_MIN_LENGTH = 6
+DEFAULT_LOGIN_LIMIT_COUNT = 7
+DEFAULT_LOGIN_LIMIT_TIME = 30  # Unit: minute
+DEFAULT_SECURITY_MAX_IDLE_TIME = 30  # Unit: minute
 
 # Django bootstrap3 setting, more see http://django-bootstrap3.readthedocs.io/en/latest/settings.html
 BOOTSTRAP3 = {
@@ -418,3 +470,12 @@ TOKEN_EXPIRATION = CONFIG.TOKEN_EXPIRATION or 3600
 DISPLAY_PER_PAGE = CONFIG.DISPLAY_PER_PAGE or 25
 DEFAULT_EXPIRED_YEARS = 70
 USER_GUIDE_URL = ""
+
+
+SWAGGER_SETTINGS = {
+    'SECURITY_DEFINITIONS': {
+        'basic': {
+            'type': 'basic'
+        }
+    },
+}

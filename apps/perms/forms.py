@@ -4,27 +4,24 @@ from __future__ import absolute_import, unicode_literals
 from django import forms
 from django.utils.translation import ugettext_lazy as _
 
-from .hands import User
+from orgs.mixins import OrgModelForm
+from orgs.utils import current_org
 from .models import AssetPermission
 
 
-class AssetPermissionForm(forms.ModelForm):
-    users = forms.ModelMultipleChoiceField(
-        queryset=User.objects.exclude(role=User.ROLE_APP),
-        label=_("User"),
-        widget=forms.SelectMultiple(
-            attrs={
-                'class': 'select2',
-                'data-placeholder': _('Select users')
-            }
-        ),
-        required=False,
-    )
+class AssetPermissionForm(OrgModelForm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if 'initial' not in kwargs:
+            return
+        users_field = self.fields.get('users')
+        if hasattr(users_field, 'queryset'):
+            users_field.queryset = current_org.get_org_users()
 
     class Meta:
         model = AssetPermission
         exclude = (
-            'id', 'date_created', 'created_by'
+            'id', 'date_created', 'created_by', 'org_id'
         )
         widgets = {
             'users': forms.SelectMultiple(

@@ -13,13 +13,13 @@ import ipaddress
 from django.http import Http404
 from django.conf import settings
 from django.contrib.auth.mixins import UserPassesTestMixin
-from django.contrib.auth import authenticate, login as auth_login
+from django.contrib.auth import authenticate
 from django.utils.translation import ugettext as _
 from django.core.cache import cache
 
 from common.tasks import send_mail_async
 from common.utils import reverse, get_object_or_none
-from common.models import Setting
+from common.models import common_settings, Setting
 from common.forms import SecuritySettingForm
 from .models import User, LoginLog
 
@@ -190,33 +190,22 @@ def validate_ip(ip):
     return False
 
 
-def get_login_ip(request):
-    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')
-    if x_forwarded_for and x_forwarded_for[0]:
-        login_ip = x_forwarded_for[0]
-    else:
-        login_ip = request.META.get('REMOTE_ADDR', '')
-
-    return login_ip
-
-
-def write_login_log(username, type='', ip='', user_agent=''):
+def write_login_log(*args, **kwargs):
+    ip = kwargs.get('ip', '')
     if not (ip and validate_ip(ip)):
         ip = ip[:15]
         city = "Unknown"
     else:
         city = get_ip_city(ip)
-    LoginLog.objects.create(
-        username=username, type=type,
-        ip=ip, city=city, user_agent=user_agent
-    )
+    kwargs.update({'ip': ip, 'city': city})
+    LoginLog.objects.create(**kwargs)
 
 
 def get_ip_city(ip, timeout=10):
-    # Taobao ip api: http://ip.taobao.com//service/getIpInfo.php?ip=8.8.8.8
+    # Taobao ip api: http://ip.taobao.com/service/getIpInfo.php?ip=8.8.8.8
     # Sina ip api: http://int.dpool.sina.com.cn/iplookup/iplookup.php?ip=8.8.8.8&format=json
 
-    url = 'http://int.dpool.sina.com.cn/iplookup/iplookup.php?ip=%s&format=json' % ip
+    url = 'http://ip.taobao.com/service/getIpInfo.php?ip=%s' % ip
     try:
         r = requests.get(url, timeout=timeout)
     except:
@@ -225,8 +214,13 @@ def get_ip_city(ip, timeout=10):
     if r and r.status_code == 200:
         try:
             data = r.json()
-            if not isinstance(data, int) and data['ret'] == 1:
-                city = data['country'] + ' ' + data['city']
+            if not isinstance(data, int) and data['code'] == 0:
+                country = data['data']['country']
+                _city = data['data']['city']
+                if country == 'XX':
+                    city = _city
+                else:
+                    city = ' '.join([country, _city])
         except ValueError:
             pass
     return city
@@ -269,10 +263,12 @@ def generate_otp_uri(request, issuer="Jumpserver"):
         otp_secret_key = base64.b32encode(os.urandom(10)).decode('utf-8')
     cache.set(request.session.session_key+'otp_key', otp_secret_key, 600)
     totp = pyotp.TOTP(otp_secret_key)
-    return totp.provisioning_uri(name=user.username, issuer_name=issuer)
+    return totp.provisioning_uri(name=user.username, issuer_name=issuer), otp_secret_key
 
 
 def check_otp_code(otp_secret_key, otp_code):
+    if not otp_secret_key or not otp_code:
+        return False
     totp = pyotp.TOTP(otp_secret_key)
     return totp.verify(otp_code)
 
@@ -311,8 +307,8 @@ def check_password_rules(password):
     lower_field_name = 'SECURITY_PASSWORD_LOWER_CASE'
     number_field_name = 'SECURITY_PASSWORD_NUMBER'
     special_field_name = 'SECURITY_PASSWORD_SPECIAL_CHAR'
-    min_length_setting = Setting.objects.filter(name=min_field_name).first()
-    min_length = min_length_setting.value if min_length_setting else settings.DEFAULT_PASSWORD_MIN_LENGTH
+    min_length = getattr(common_settings, min_field_name) or \
+                 settings.DEFAULT_PASSWORD_MIN_LENGTH
 
     password_setting = Setting.objects.filter(name__startswith='SECURITY_PASSWORD')
     if not password_setting:
@@ -332,3 +328,47 @@ def check_password_rules(password):
 
     match_obj = re.match(pattern, password)
     return bool(match_obj)
+
+
+key_prefix_limit = "_LOGIN_LIMIT_{}_{}"
+key_prefix_block = "_LOGIN_BLOCK_{}"
+
+
+# def increase_login_failed_count(key_limit, key_block):
+def increase_login_failed_count(username, ip):
+    key_limit = key_prefix_limit.format(username, ip)
+    count = cache.get(key_limit)
+    count = count + 1 if count else 1
+
+    limit_time = common_settings.SECURITY_LOGIN_LIMIT_TIME or \
+        settings.DEFAULT_LOGIN_LIMIT_TIME
+    cache.set(key_limit, count, int(limit_time)*60)
+
+
+def clean_failed_count(username, ip):
+    key_limit = key_prefix_limit.format(username, ip)
+    key_block = key_prefix_block.format(username)
+    cache.delete(key_limit)
+    cache.delete(key_block)
+
+
+def is_block_login(username, ip):
+    key_limit = key_prefix_limit.format(username, ip)
+    key_block = key_prefix_block.format(username)
+    count = cache.get(key_limit, 0)
+
+    limit_count = common_settings.SECURITY_LOGIN_LIMIT_COUNT or \
+        settings.DEFAULT_LOGIN_LIMIT_COUNT
+    limit_time = common_settings.SECURITY_LOGIN_LIMIT_TIME or \
+        settings.DEFAULT_LOGIN_LIMIT_TIME
+
+    if count >= limit_count:
+        cache.set(key_block, 1, int(limit_time)*60)
+    if count and count >= limit_count:
+        return True
+
+
+def is_need_unblock(key_block):
+    if not cache.get(key_block):
+        return False
+    return True

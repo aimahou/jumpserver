@@ -10,7 +10,7 @@ from django.views.generic.detail import DetailView
 from common.const import create_success_msg, update_success_msg
 from ..forms import SystemUserForm
 from ..models import SystemUser, Node
-from ..hands import AdminUserRequiredMixin
+from common.permissions import AdminUserRequiredMixin
 
 
 __all__ = [
@@ -94,6 +94,7 @@ class SystemUserAssetView(AdminUserRequiredMixin, DetailView):
         context = {
             'app': _('assets'),
             'action': _('System user asset'),
+            'nodes_remain': Node.objects.exclude(systemuser=self.object)
         }
         kwargs.update(context)
         return super().get_context_data(**kwargs)

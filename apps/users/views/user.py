@@ -24,21 +24,24 @@ from django.views import View
 from django.views.generic.base import TemplateView
 from django.db import transaction
 from django.views.generic.edit import (
-    CreateView, UpdateView, FormMixin, FormView
+    CreateView, UpdateView, FormView
 )
-from django.views.generic.detail import DetailView, SingleObjectMixin
+from django.views.generic.detail import DetailView
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth import logout as auth_logout
 
 from common.const import create_success_msg, update_success_msg
 from common.mixins import JSONResponseMixin
 from common.utils import get_logger, get_object_or_none, is_uuid, ssh_key_gen
-from common.models import Setting
+from common.models import Setting, common_settings
+from common.permissions import AdminUserRequiredMixin
+from orgs.utils import current_org
 from .. import forms
 from ..models import User, UserGroup
-from ..utils import AdminUserRequiredMixin, generate_otp_uri, check_otp_code, get_user_or_tmp_user, get_password_check_rules, check_password_rules
+from ..utils import generate_otp_uri, check_otp_code, \
+    get_user_or_tmp_user, get_password_check_rules, check_password_rules, \
+    is_need_unblock
 from ..signals import post_user_create
-from ..tasks import write_login_log_async
 
 __all__ = [
     'UserListView', 'UserCreateView', 'UserDetailView',
@@ -50,7 +53,7 @@ __all__ = [
     'UserPublicKeyGenerateView',
     'UserOtpEnableAuthenticationView', 'UserOtpEnableInstallAppView',
     'UserOtpEnableBindView', 'UserOtpSettingsSuccessView',
-    'UserOtpDisableAuthenticationView',
+    'UserOtpDisableAuthenticationView', 'UserOtpUpdateView'
 ]
 
 logger = get_logger(__name__)
@@ -87,6 +90,12 @@ class UserCreateView(AdminUserRequiredMixin, SuccessMessageMixin, CreateView):
         post_user_create.send(self.__class__, user=user)
         return super().form_valid(form)
 
+    def get_form_kwargs(self):
+        kwargs = super(UserCreateView, self).get_form_kwargs()
+        data = {'request': self.request}
+        kwargs.update(data)
+        return kwargs
+
 
 class UserUpdateView(AdminUserRequiredMixin, SuccessMessageMixin, UpdateView):
     model = User
@@ -119,6 +128,12 @@ class UserUpdateView(AdminUserRequiredMixin, SuccessMessageMixin, UpdateView):
             )
             return self.form_invalid(form)
         return super().form_valid(form)
+
+    def get_form_kwargs(self):
+        kwargs = super(UserUpdateView, self).get_form_kwargs()
+        data = {'request': self.request}
+        kwargs.update(data)
+        return kwargs
 
 
 class UserBulkUpdateView(AdminUserRequiredMixin, TemplateView):
@@ -156,7 +171,7 @@ class UserBulkUpdateView(AdminUserRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = {
             'app': 'Assets',
-            'action': 'Bulk update asset',
+            'action': _('Bulk update user'),
             'form': self.form,
             'users_selected': self.id_list,
         }
@@ -168,16 +183,26 @@ class UserDetailView(AdminUserRequiredMixin, DetailView):
     model = User
     template_name = 'users/user_detail.html'
     context_object_name = "user_object"
+    key_prefix_block = "_LOGIN_BLOCK_{}"
 
     def get_context_data(self, **kwargs):
+        user = self.get_object()
+        key_block = self.key_prefix_block.format(user.username)
         groups = UserGroup.objects.exclude(id__in=self.object.groups.all())
         context = {
             'app': _('Users'),
             'action': _('User detail'),
-            'groups': groups
+            'groups': groups,
+            'unblock': is_need_unblock(key_block),
         }
         kwargs.update(context)
         return super().get_context_data(**kwargs)
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        org_users = current_org.get_org_users().values_list('id', flat=True)
+        queryset = queryset.filter(id__in=org_users)
+        return queryset
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -323,7 +348,6 @@ class UserBulkImportView(AdminUserRequiredMixin, JSONResponseMixin, FormView):
 class UserGrantedAssetView(AdminUserRequiredMixin, DetailView):
     model = User
     template_name = 'users/user_granted_asset.html'
-    object = None
 
     def get_context_data(self, **kwargs):
         context = {
@@ -338,10 +362,10 @@ class UserProfileView(LoginRequiredMixin, TemplateView):
     template_name = 'users/user_profile.html'
 
     def get_context_data(self, **kwargs):
-        mfa_setting = Setting.objects.filter(name='SECURITY_MFA_AUTH').first()
+        mfa_setting = common_settings.SECURITY_MFA_AUTH
         context = {
             'action': _('Profile'),
-            'mfa_setting': mfa_setting.cleaned_value if mfa_setting else False,
+            'mfa_setting': mfa_setting if mfa_setting is not None else False,
         }
         kwargs.update(context)
         return super().get_context_data(**kwargs)
@@ -481,8 +505,10 @@ class UserOtpEnableBindView(TemplateView, FormView):
 
     def get_context_data(self, **kwargs):
         user = get_user_or_tmp_user(self.request)
+        otp_uri, otp_secret_key = generate_otp_uri(self.request)
         context = {
-            'otp_uri': generate_otp_uri(self.request),
+            'otp_uri': otp_uri,
+            'otp_secret_key': otp_secret_key,
             'user': user
         }
         kwargs.update(context)
@@ -497,7 +523,7 @@ class UserOtpEnableBindView(TemplateView, FormView):
             return super().form_valid(form)
 
         else:
-            form.add_error("otp_code", _("MFA code invalid"))
+            form.add_error("otp_code", _("MFA code invalid, or ntp sync server time"))
             return self.form_invalid(form)
 
     def save_otp(self, otp_secret_key):
@@ -522,8 +548,12 @@ class UserOtpDisableAuthenticationView(FormView):
             user.save()
             return super().form_valid(form)
         else:
-            form.add_error('otp_code', _('MFA code invalid'))
+            form.add_error('otp_code', _('MFA code invalid, or ntp sync server time'))
             return super().form_invalid(form)
+
+
+class UserOtpUpdateView(UserOtpDisableAuthenticationView):
+    success_url = reverse_lazy('users:user-otp-enable-bind')
 
 
 class UserOtpSettingsSuccessView(TemplateView):

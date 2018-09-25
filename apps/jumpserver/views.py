@@ -1,15 +1,18 @@
 import datetime
 
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseRedirect
+from django.conf import settings
 from django.views.generic import TemplateView, View
 from django.utils import timezone
+from django.utils.translation import ugettext_lazy as _
 from django.db.models import Count
-from django.contrib.auth.mixins import LoginRequiredMixin
 from django.shortcuts import redirect
+from django.contrib.auth.mixins import LoginRequiredMixin
 
 from users.models import User
 from assets.models import Asset
 from terminal.models import Session
+from orgs.utils import current_org
 
 
 class IndexView(LoginRequiredMixin, TemplateView):
@@ -20,14 +23,18 @@ class IndexView(LoginRequiredMixin, TemplateView):
     session_month_dates = []
     session_month_dates_archive = []
 
-    def get(self, request, *args, **kwargs):
-        if not request.user.is_superuser:
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return self.handle_no_permission()
+        if not request.user.is_org_admin:
             return redirect('assets:user-asset-list')
-        return super(IndexView, self).get(request, *args, **kwargs)
+        if not current_org or not current_org.can_admin_by(request.user):
+            return redirect('orgs:switch-a-org')
+        return super(IndexView, self).dispatch(request, *args, **kwargs)
 
     @staticmethod
     def get_user_count():
-        return User.objects.filter(role__in=('Admin', 'User')).count()
+        return current_org.get_org_users().count()
 
     @staticmethod
     def get_asset_count():
@@ -49,7 +56,6 @@ class IndexView(LoginRequiredMixin, TemplateView):
 
     def get_week_login_asset_count(self):
         return self.session_week.count()
-        # return self.session_week.values('asset').distinct().count()
 
     def get_month_day_metrics(self):
         month_str = [d.strftime('%m-%d') for d in self.session_month_dates] or ['0']
@@ -83,7 +89,7 @@ class IndexView(LoginRequiredMixin, TemplateView):
         return self.session_month.values('user').distinct().count()
 
     def get_month_inactive_user_total(self):
-        return User.objects.all().count() - self.get_month_active_user_total()
+        return current_org.get_org_users().count() - self.get_month_active_user_total()
 
     def get_month_active_asset_total(self):
         return self.session_month.values('asset').distinct().count()
@@ -93,7 +99,7 @@ class IndexView(LoginRequiredMixin, TemplateView):
 
     @staticmethod
     def get_user_disabled_total():
-        return User.objects.filter(is_active=False).count()
+        return current_org.get_org_users().filter(is_active=False).count()
 
     @staticmethod
     def get_asset_disabled_total():
@@ -171,8 +177,14 @@ class IndexView(LoginRequiredMixin, TemplateView):
 
 class LunaView(View):
     def get(self, request):
-        msg = """
-        Luna是单独部署的一个程序，你需要部署luna，coco，配置nginx做url分发, 
-        如果你看到了这个页面，证明你访问的不是nginx监听的端口，祝你好运
-        """
+        msg = _("<div>Luna is a separately deployed program, you need to deploy Luna, coco, configure nginx for url distribution,</div> "
+                "</div>If you see this page, prove that you are not accessing the nginx listening port. Good luck.</div>")
         return HttpResponse(msg)
+
+
+class I18NView(View):
+    def get(self, request, lang):
+        referer_url = request.META.get('HTTP_REFERER', '/')
+        response = HttpResponseRedirect(referer_url)
+        response.set_cookie(settings.LANGUAGE_COOKIE_NAME, lang)
+        return response

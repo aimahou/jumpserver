@@ -8,7 +8,6 @@ from django.contrib.auth import login as auth_login, logout as auth_logout
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import ListView
 from django.core.files.storage import default_storage
-from django.db.models import Q
 from django.http import HttpResponseRedirect, HttpResponse
 from django.shortcuts import reverse, redirect
 from django.utils.decorators import method_decorator
@@ -21,12 +20,12 @@ from django.views.generic.edit import FormView
 from formtools.wizard.views import SessionWizardView
 from django.conf import settings
 
-from common.utils import get_object_or_none
-from common.mixins import DatetimeSearchMixin, AdminUserRequiredMixin
-from common.models import Setting
+from common.utils import get_object_or_none, get_request_ip
 from ..models import User, LoginLog
-from ..utils import send_reset_password_mail, check_otp_code, get_login_ip, redirect_user_first_login_or_index, \
-    get_user_or_tmp_user, set_tmp_user_to_cache, get_password_check_rules, check_password_rules
+from ..utils import send_reset_password_mail, check_otp_code, \
+    redirect_user_first_login_or_index, get_user_or_tmp_user, \
+    set_tmp_user_to_cache, get_password_check_rules, check_password_rules, \
+    is_block_login, increase_login_failed_count, clean_failed_count
 from ..tasks import write_login_log_async
 from .. import forms
 
@@ -47,7 +46,7 @@ class UserLoginView(FormView):
     form_class = forms.UserLoginForm
     form_class_captcha = forms.UserLoginCaptchaForm
     redirect_field_name = 'next'
-    key_prefix = "_LOGIN_INVALID_{}"
+    key_prefix_captcha = "_LOGIN_INVALID_{}"
 
     def get(self, request, *args, **kwargs):
         if request.user.is_staff:
@@ -57,24 +56,50 @@ class UserLoginView(FormView):
         request.session.set_test_cookie()
         return super().get(request, *args, **kwargs)
 
+    def post(self, request, *args, **kwargs):
+        # limit login authentication
+        ip = get_request_ip(request)
+        username = self.request.POST.get('username')
+        if is_block_login(username, ip):
+            return self.render_to_response(self.get_context_data(block_login=True))
+        return super().post(request, *args, **kwargs)
+
     def form_valid(self, form):
         if not self.request.session.test_cookie_worked():
             return HttpResponse(_("Please enable cookies and try again."))
 
         set_tmp_user_to_cache(self.request, form.get_user())
+        username = form.cleaned_data.get('username')
+        ip = get_request_ip(self.request)
+        # 登陆成功，清除缓存计数
+        clean_failed_count(username, ip)
         return redirect(self.get_success_url())
 
     def form_invalid(self, form):
-        ip = get_login_ip(self.request)
-        cache.set(self.key_prefix.format(ip), 1, 3600)
+        # write login failed log
+        username = form.cleaned_data.get('username')
+        data = {
+            'username': username,
+            'mfa': LoginLog.MFA_UNKNOWN,
+            'reason': LoginLog.REASON_PASSWORD,
+            'status': False
+        }
+        self.write_login_log(data)
+
+        # limit user login failed count
+        ip = get_request_ip(self.request)
+        increase_login_failed_count(username, ip)
+
+        # show captcha
+        cache.set(self.key_prefix_captcha.format(ip), 1, 3600)
         old_form = form
         form = self.form_class_captcha(data=form.data)
         form._errors = old_form.errors
         return super().form_invalid(form)
 
     def get_form_class(self):
-        ip = get_login_ip(self.request)
-        if cache.get(self.key_prefix.format(ip)):
+        ip = get_request_ip(self.request)
+        if cache.get(self.key_prefix_captcha.format(ip)):
             return self.form_class_captcha
         else:
             return self.form_class
@@ -91,7 +116,13 @@ class UserLoginView(FormView):
         elif not user.otp_enabled:
             # 0 & T,F
             auth_login(self.request, user)
-            self.write_login_log()
+            data = {
+                'username': self.request.user.username,
+                'mfa': int(self.request.user.otp_enabled),
+                'reason': LoginLog.REASON_NOTHING,
+                'status': True
+            }
+            self.write_login_log(data)
             return redirect_user_first_login_or_index(self.request, self.redirect_field_name)
 
     def get_context_data(self, **kwargs):
@@ -101,13 +132,16 @@ class UserLoginView(FormView):
         kwargs.update(context)
         return super().get_context_data(**kwargs)
 
-    def write_login_log(self):
-        login_ip = get_login_ip(self.request)
+    def write_login_log(self, data):
+        login_ip = get_request_ip(self.request)
         user_agent = self.request.META.get('HTTP_USER_AGENT', '')
-        write_login_log_async.delay(
-            self.request.user.username, type='W',
-            ip=login_ip, user_agent=user_agent
-        )
+        tmp_data = {
+            'ip': login_ip,
+            'type': 'W',
+            'user_agent': user_agent
+        }
+        data.update(tmp_data)
+        write_login_log_async.delay(**data)
 
 
 class UserLoginOtpView(FormView):
@@ -122,22 +156,38 @@ class UserLoginOtpView(FormView):
 
         if check_otp_code(otp_secret_key, otp_code):
             auth_login(self.request, user)
-            self.write_login_log()
+            data = {
+                'username': self.request.user.username,
+                'mfa': int(self.request.user.otp_enabled),
+                'reason': LoginLog.REASON_NOTHING,
+                'status': True
+            }
+            self.write_login_log(data)
             return redirect(self.get_success_url())
         else:
-            form.add_error('otp_code', _('MFA code invalid'))
+            data = {
+                'username': user.username,
+                'mfa': int(user.otp_enabled),
+                'reason': LoginLog.REASON_MFA,
+                'status': False
+            }
+            self.write_login_log(data)
+            form.add_error('otp_code', _('MFA code invalid, or ntp sync server time'))
             return super().form_invalid(form)
 
     def get_success_url(self):
         return redirect_user_first_login_or_index(self.request, self.redirect_field_name)
 
-    def write_login_log(self):
-        login_ip = get_login_ip(self.request)
+    def write_login_log(self, data):
+        login_ip = get_request_ip(self.request)
         user_agent = self.request.META.get('HTTP_USER_AGENT', '')
-        write_login_log_async.delay(
-            self.request.user.username, type='W',
-            ip=login_ip, user_agent=user_agent
-        )
+        tmp_data = {
+            'ip': login_ip,
+            'type': 'W',
+            'user_agent': user_agent
+        }
+        data.update(tmp_data)
+        write_login_log_async.delay(**data)
 
 
 @method_decorator(never_cache, name='dispatch')
@@ -254,7 +304,7 @@ class UserFirstLoginView(LoginRequiredMixin, SessionWizardView):
     file_storage = default_storage
 
     def dispatch(self, request, *args, **kwargs):
-        if request.user.is_authenticated() and not request.user.is_first_login:
+        if request.user.is_authenticated and not request.user.is_first_login:
             return redirect(reverse('index'))
         return super().dispatch(request, *args, **kwargs)
 
@@ -305,42 +355,6 @@ class UserFirstLoginView(LoginRequiredMixin, SessionWizardView):
         return form
 
 
-class LoginLogListView(AdminUserRequiredMixin, DatetimeSearchMixin, ListView):
-    template_name = 'users/login_log_list.html'
-    model = LoginLog
-    paginate_by = settings.DISPLAY_PER_PAGE
-    user = keyword = ""
-    date_to = date_from = None
-
-    def get_queryset(self):
-        self.user = self.request.GET.get('user', '')
-        self.keyword = self.request.GET.get("keyword", '')
-
-        queryset = super().get_queryset()
-        queryset = queryset.filter(
-            datetime__gt=self.date_from, datetime__lt=self.date_to
-        )
-        if self.user:
-            queryset = queryset.filter(username=self.user)
-        if self.keyword:
-            queryset = queryset.filter(
-                Q(ip__contains=self.keyword) |
-                Q(city__contains=self.keyword) |
-                Q(username__contains=self.keyword)
-            )
-        return queryset
-
-    def get_context_data(self, **kwargs):
-        context = {
-            'app': _('Users'),
-            'action': _('Login log list'),
-            'date_from': self.date_from,
-            'date_to': self.date_to,
-            'user': self.user,
-            'keyword': self.keyword,
-            'user_list': set(
-                LoginLog.objects.all().values_list('username', flat=True)
-            )
-        }
-        kwargs.update(context)
-        return super().get_context_data(**kwargs)
+class LoginLogListView(ListView):
+    def get(self, request, *args, **kwargs):
+        return redirect(reverse('audits:login-log-list'))
