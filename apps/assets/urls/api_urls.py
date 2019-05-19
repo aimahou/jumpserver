@@ -5,7 +5,6 @@ from rest_framework_bulk.routes import BulkRouter
 
 app_name = 'assets'
 
-
 router = BulkRouter()
 router.register(r'assets', api.AssetViewSet, 'asset')
 router.register(r'admin-user', api.AdminUserViewSet, 'admin-user')
@@ -19,6 +18,8 @@ urlpatterns = [
     path('assets-bulk/', api.AssetListUpdateApi.as_view(), name='asset-bulk-update'),
     path('system-user/<uuid:pk>/auth-info/',
          api.SystemUserAuthInfoApi.as_view(), name='system-user-auth-info'),
+    path('system-user/<uuid:pk>/assets/',
+         api.SystemUserAssetsListView.as_view(), name='system-user-assets'),
     path('assets/<uuid:pk>/refresh/',
          api.AssetRefreshHardwareApi.as_view(), name='asset-refresh'),
     path('assets/<uuid:pk>/alive/',
@@ -31,10 +32,16 @@ urlpatterns = [
          api.AdminUserAuthApi.as_view(), name='admin-user-auth'),
     path('admin-user/<uuid:pk>/connective/',
          api.AdminUserTestConnectiveApi.as_view(), name='admin-user-connective'),
+
     path('system-user/<uuid:pk>/push/',
          api.SystemUserPushApi.as_view(), name='system-user-push'),
+    path('system-user/<uuid:pk>/asset/<uuid:aid>/push/',
+         api.SystemUserPushToAssetApi.as_view(), name='system-user-push-to-asset'),
+    path('system-user/<uuid:pk>/asset/<uuid:aid>/test/',
+         api.SystemUserTestAssetConnectabilityApi.as_view(), name='system-user-test-to-asset'),
     path('system-user/<uuid:pk>/connective/',
          api.SystemUserTestConnectiveApi.as_view(), name='system-user-connective'),
+
     path('nodes/<uuid:pk>/children/',
          api.NodeChildrenApi.as_view(), name='node-children'),
     path('nodes/children/', api.NodeChildrenApi.as_view(), name='node-children-2'),

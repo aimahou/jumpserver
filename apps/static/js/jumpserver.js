@@ -154,8 +154,10 @@ function activeNav() {
 function APIUpdateAttr(props) {
     // props = {url: .., body: , success: , error: , method: ,}
     props = props || {};
-    var success_message = props.success_message || '更新成功!';
-    var fail_message = props.fail_message || '更新时发生未知错误.';
+    var user_success_message = props.success_message;
+    var default_success_message = gettext('Update is successful!');
+    var user_fail_message = props.fail_message;
+    var default_failed_message = gettext('An unknown error occurred while updating..');
     var flash_message = props.flash_message || true;
     if (props.flash_message === false){
         flash_message = false;
@@ -169,14 +171,36 @@ function APIUpdateAttr(props) {
         dataType: props.data_type || "json"
     }).done(function(data, textStatue, jqXHR) {
         if (flash_message) {
-            toastr.success(success_message);
+            var msg = "";
+            if (user_fail_message) {
+                msg = user_success_message;
+            } else {
+                msg = default_success_message;
+            }
+            toastr.success(msg);
         }
         if (typeof props.success === 'function') {
             return props.success(data);
         }
     }).fail(function(jqXHR, textStatus, errorThrown) {
         if (flash_message) {
-            toastr.error(fail_message);
+            var msg = "";
+            console.log(jqXHR);
+            console.log(textStatus);
+            console.log(errorThrown);
+            if (user_fail_message) {
+                msg = user_fail_message;
+            } else if (jqXHR.responseJSON) {
+                if (jqXHR.responseJSON.error) {
+                    msg = jqXHR.responseJSON.error
+                } else if (jqXHR.responseJSON.msg) {
+                    msg = jqXHR.responseJSON.msg
+                }
+            }
+            if (msg === "") {
+                msg = default_failed_message;
+            }
+            toastr.error(msg);
         }
         if (typeof props.error === 'function') {
             return props.error(jqXHR.responseText, jqXHR.status);
@@ -199,25 +223,25 @@ function objectDelete(obj, name, url, redirectTo) {
         };
         var fail = function() {
             // swal("错误", "删除"+"[ "+name+" ]"+"遇到错误", "error");
-            swal("错误", "[ "+name+" ]"+"正在被资产使用中，请先解除资产绑定", "error");
+            swal(gettext('Error'), "[ "+name+" ]" + gettext("Being used by the asset, please unbind the asset first."), "error");
         };
         APIUpdateAttr({
             url: url,
             body: JSON.stringify(body),
             method: 'DELETE',
-            success_message: "删除成功",
+            success_message: gettext("Delete the success"),
             success: success,
             error: fail
         });
     }
     swal({
-        title: '你确定删除吗 ?',
+        title: gettext('Are you sure about deleting it?'),
         text: " [" + name + "] ",
         type: "warning",
         showCancelButton: true,
-        cancelButtonText: '取消',
+        cancelButtonText: gettext('Cancel'),
         confirmButtonColor: "#ed5565",
-        confirmButtonText: '确认',
+        confirmButtonText: gettext('Confirm'),
         closeOnConfirm: true,
     }, function () {
         doDelete()
@@ -236,29 +260,29 @@ function orgDelete(obj, name, url, redirectTo){
         };
         var fail = function(responseText, status) {
             if (status === 400){
-                swal("错误",  "[ " + name + " ] 组织中包含未删除信息，请删除后重试", "error");
+                swal(gettext("Error"),  "[ " + name + " ] " + gettext("The organization contains undeleted information. Please try again after deleting"), "error");
             }
             else if (status === 405){
-                swal("错误",  "请勿在组织 [ "+ name + " ] 下执行此操作，切换到其他组织后重试", "error");
+                swal(gettext("Error"), " [ "+ name + " ] " + gettext("Do not perform this operation under this organization. Try again after switching to another organization"), "error");
             }
         };
         APIUpdateAttr({
             url: url,
             body: JSON.stringify(body),
             method: 'DELETE',
-            success_message: "删除成功",
+            success_message: gettext("Delete the success"),
             success: success,
             error: fail
         });
     }
     swal({
-        title: "请确保组织内的以下信息已删除",
-        text: "用户列表、用户组、资产列表、网域列表、管理用户、系统用户、标签管理、资产授权规则",
+        title: gettext("Please ensure that the following information in the organization has been deleted"),
+        text: gettext("User list、User group、Asset list、Domain list、Admin user、System user、Labels、Asset permission"),
         type: "warning",
         showCancelButton: true,
-        cancelButtonText: '取消',
+        cancelButtonText: gettext('Cancel'),
         confirmButtonColor: "#ed5565",
-        confirmButtonText: '确认',
+        confirmButtonText: gettext('Confirm'),
         closeOnConfirm: true
     }, function () {
         doDelete();
@@ -292,20 +316,20 @@ var jumpserver = {};
 jumpserver.checked = false;
 jumpserver.selected = {};
 jumpserver.language = {
-    processing: "加载中",
-    search: "搜索",
+    processing: gettext('Loading ...'),
+    search: gettext('Search'),
     select: {
         rows: {
-            _:  "选中 %d 项",
+            _:  gettext("Selected item %d"),
             0: ""
         }
     },
-    lengthMenu: "每页  _MENU_",
-    info: "显示第 _START_ 至 _END_ 项结果; 总共 _TOTAL_ 项",
+    lengthMenu: gettext("Per page _MENU_"),
+    info: gettext('Displays the results of items _START_ to _END_; A total of _TOTAL_ entries'),
     infoFiltered: "",
     infoEmpty: "",
-    zeroRecords: "没有匹配项",
-    emptyTable: "没有记录",
+    zeroRecords: gettext("No match"),
+    emptyTable: gettext('No record'),
     paginate: {
         first: "«",
         previous: "‹",
