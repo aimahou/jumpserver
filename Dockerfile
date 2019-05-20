@@ -30,7 +30,7 @@ RUN set -ex \
     && source /opt/py3/bin/activate \
     && pip install --upgrade pip setuptools \
     && pip install -r /opt/jumpserver/requirements/requirements.txt \
-    && curl -o /etc/nginx/conf.d/jumpserver.conf https://demo.jumpserver.org/download/nginx/conf.d/jumpserver.conf \
+    && curl -o /etc/nginx/conf.d/jumpserver_core.conf https://demo.jumpserver.org/download/nginx/conf.d/jumpserver_core.conf \
     && yum clean all \
     && rm -rf /var/cache/yum/* \
     && rm -rf /opt/luna.tar.gz \
