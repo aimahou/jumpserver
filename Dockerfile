@@ -2,8 +2,6 @@ FROM centos:latest
 LABEL maintainer "wojiushixiaobai"
 WORKDIR /opt
 
-ENV LUNA_VER=1.4.10
-
 RUN set -ex \
     && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && yum -y install kde-l10n-Chinese \
