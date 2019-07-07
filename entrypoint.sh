@@ -40,4 +40,3 @@ fi
 
 source /opt/py3/bin/activate
 cd /opt/jumpserver && ./jms start all -d
-tail -f /opt/readme.txt
